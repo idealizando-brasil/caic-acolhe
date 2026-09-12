@@ -17,13 +17,14 @@ export default function Login(){
 
  useEffect(()=>{
   const hash=new URLSearchParams(window.location.hash.replace(/^#/,""));
-  if(hash.get("type")!=="invite")return;
-  setMode("checking-invite");
   const supabase=createClient();
   let active=true;
   async function checkInvite(){
    const {data:{session},error:sessionError}=await supabase.auth.getSession();
    if(!active)return;
+   const firstAccess=hash.get("type")==="invite"||session?.user.user_metadata?.first_access_required===true;
+   if(!firstAccess){setMode("login");return}
+   setMode("checking-invite");
    if(sessionError||!session){
     setError("Este convite é inválido ou expirou. Solicite um novo convite à administração.");
     setMode("login");
@@ -32,6 +33,7 @@ export default function Login(){
    setEmail(session.user.email||"");
    setMode("set-password");
   }
+  setMode("checking-invite");
   void checkInvite();
   return()=>{active=false};
  },[]);
@@ -48,7 +50,9 @@ export default function Login(){
   if(password.length<8){setError("A senha deve ter pelo menos 8 caracteres.");return}
   if(password!==confirmPassword){setError("As senhas digitadas não são iguais.");return}
   setLoading(true);
-  const {error:updateError}=await createClient().auth.updateUser({password});
+  const supabase=createClient();
+  const {data:{user}}=await supabase.auth.getUser();
+  const {error:updateError}=await supabase.auth.updateUser({password,data:{...(user?.user_metadata||{}),first_access_required:false}});
   if(updateError){setError("Não foi possível criar a senha. Solicite um novo convite.");setLoading(false);return}
   router.replace("/dashboard");router.refresh();
  }
