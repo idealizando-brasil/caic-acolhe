@@ -11,15 +11,18 @@ type School = { id: string; name: string };
 type ClassRow = { id: string; name: string; school_year: number };
 type StudentRow = {
   id: string;
+  enrollment_number: string | null;
   full_name: string;
   birth_date: string | null;
+  mother_name: string | null;
+  father_name: string | null;
   guardian_name: string | null;
   guardian_phone: string | null;
   class_id: string | null;
   classes: { name: string; school_year: number } | null;
 };
 
-const emptyForm = { full_name: "", birth_date: "", class_id: "", guardian_name: "", guardian_phone: "" };
+const emptyForm = { full_name: "", birth_date: "", class_id: "", mother_name: "", father_name: "", guardian_name: "", guardian_phone: "" };
 
 export default function AlunosETurmas() {
   const [supabase] = useState(() => createClient());
@@ -53,7 +56,7 @@ export default function AlunosETurmas() {
     setSchool(current);
     const [{ data: classData }, { data: studentData }] = await Promise.all([
       supabase.from("classes").select("id,name,school_year").eq("school_id", current.id).eq("active", true).order("school_year", { ascending: false }).order("name"),
-      supabase.from("students").select("id,full_name,birth_date,guardian_name,guardian_phone,class_id,classes(name,school_year)").eq("school_id", current.id).eq("active", true).order("full_name")
+      supabase.from("students").select("id,enrollment_number,full_name,birth_date,mother_name,father_name,guardian_name,guardian_phone,class_id,classes(name,school_year)").eq("school_id", current.id).eq("active", true).order("full_name")
     ]);
     setClasses((classData || []) as ClassRow[]);
     setStudents((studentData || []) as unknown as StudentRow[]);
@@ -65,6 +68,8 @@ export default function AlunosETurmas() {
     const term = search.trim().toLocaleLowerCase("pt-BR");
     return students.filter(student => {
       const matchesText = !term || student.full_name.toLocaleLowerCase("pt-BR").includes(term) ||
+        (student.mother_name || "").toLocaleLowerCase("pt-BR").includes(term) ||
+        (student.father_name || "").toLocaleLowerCase("pt-BR").includes(term) ||
         (student.guardian_name || "").toLocaleLowerCase("pt-BR").includes(term);
       return matchesText && (!classFilter || student.class_id === classFilter);
     });
@@ -87,6 +92,8 @@ export default function AlunosETurmas() {
       full_name: student.full_name,
       birth_date: student.birth_date || "",
       class_id: student.class_id || "",
+      mother_name: student.mother_name || "",
+      father_name: student.father_name || "",
       guardian_name: student.guardian_name || "",
       guardian_phone: student.guardian_phone || ""
     });
@@ -106,6 +113,8 @@ export default function AlunosETurmas() {
       full_name: form.full_name.trim(),
       birth_date: form.birth_date || null,
       class_id: form.class_id,
+      mother_name: form.mother_name.trim() || null,
+      father_name: form.father_name.trim() || null,
       guardian_name: form.guardian_name.trim() || null,
       guardian_phone: form.guardian_phone.trim() || null,
       active: true
@@ -149,6 +158,8 @@ export default function AlunosETurmas() {
         <label>Nome completo<input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required autoFocus /></label>
         <label>Turma<select value={form.class_id} onChange={e => setForm({ ...form, class_id: e.target.value })} required><option value="">Selecione a turma</option>{classes.map(item => <option value={item.id} key={item.id}>{item.name} — {item.school_year}</option>)}</select></label>
         <label>Data de nascimento<input type="date" value={form.birth_date} onChange={e => setForm({ ...form, birth_date: e.target.value })} /></label>
+        <label>Nome da mãe<input value={form.mother_name} onChange={e => setForm({ ...form, mother_name: e.target.value })} /></label>
+        <label>Nome do pai<input value={form.father_name} onChange={e => setForm({ ...form, father_name: e.target.value })} /></label>
         <label>Nome do responsável<input value={form.guardian_name} onChange={e => setForm({ ...form, guardian_name: e.target.value })} /></label>
         <label>Telefone do responsável<input type="tel" value={form.guardian_phone} onChange={e => setForm({ ...form, guardian_phone: e.target.value })} placeholder="(88) 99999-9999" /></label>
       </div>
@@ -165,7 +176,7 @@ export default function AlunosETurmas() {
         <div><h2>Lista de alunos</h2><p className="muted">{filtered.length} {filtered.length === 1 ? "registro encontrado" : "registros encontrados"}</p></div>
         <div className="student-filters"><label className="search-box"><Search /><input aria-label="Pesquisar alunos" value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar aluno ou responsável" /></label><select aria-label="Filtrar por turma" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Todas as turmas</option>{classes.map(item => <option value={item.id} key={item.id}>{item.name} ({classCounts.get(item.id) || 0})</option>)}</select></div>
       </div>
-      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use o botão “Cadastrar aluno” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Responsável</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong></td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span>{student.guardian_name || "—"}</span>{student.guardian_phone && <small>{student.guardian_phone}</small>}</td><td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td></tr>)}</tbody></table></div>}
+      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use o botão “Cadastrar aluno” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Família e responsável</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong>{student.enrollment_number && <small>Matrícula {student.enrollment_number}</small>}</td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span><b>Mãe:</b> {student.mother_name || "—"}</span><small><b>Pai:</b> {student.father_name || "—"}</small><small><b>Responsável:</b> {student.guardian_name || "—"}{student.guardian_phone ? ` · ${student.guardian_phone}` : ""}</small></td><td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td></tr>)}</tbody></table></div>}
     </section>
   </AppShell>;
 }
