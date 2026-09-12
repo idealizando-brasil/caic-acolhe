@@ -20,9 +20,9 @@ export default function Login(){
   const supabase=createClient();
   let active=true;
   async function checkInvite(){
-   const {data:{session},error:sessionError}=await supabase.auth.getSession();
+   const [{data:{session},error:sessionError},{data:{user}}]=await Promise.all([supabase.auth.getSession(),supabase.auth.getUser()]);
    if(!active)return;
-   const firstAccess=hash.get("type")==="invite"||session?.user.user_metadata?.first_access_required===true;
+   const firstAccess=hash.get("type")==="invite"||user?.user_metadata?.first_access_required===true||session?.user.user_metadata?.first_access_required===true;
    if(!firstAccess){setMode("login");return}
    setMode("checking-invite");
    if(sessionError||!session){
@@ -30,7 +30,7 @@ export default function Login(){
     setMode("login");
     return;
    }
-   setEmail(session.user.email||"");
+   setEmail(user?.email||session.user.email||"");
    setMode("set-password");
   }
   setMode("checking-invite");
