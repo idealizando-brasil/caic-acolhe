@@ -19,5 +19,9 @@
 .data-list em{font-style:normal;background:var(--mint);color:var(--green);padding:6px 9px;border-radius:20px;font-size:12px}
 .danger-icon{border:0;background:transparent;color:#b24a3b;padding:8px;cursor:pointer}
 .danger-icon svg{width:18px}
+.settings-title,.member-actions{display:flex;align-items:center;gap:10px}
+.settings-title{justify-content:space-between}
+.icon-button{border:0;background:transparent;color:var(--green);padding:8px;cursor:pointer}
+.icon-button svg{width:18px}
 .button-link{display:flex;gap:8px;align-items:center;border-radius:10px;background:var(--green);color:white;padding:10px 14px;font-weight:700;text-decoration:none}
 @media(max-width:700px){.form-grid,.form-grid.two{grid-template-columns:1fr}.tabs button{padding:12px 8px;font-size:12px}}
