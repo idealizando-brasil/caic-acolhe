@@ -16,7 +16,7 @@ Deno.serve(async(req:Request)=>{
   const {data:caller}=await admin.from("school_memberships").select("role").eq("school_id",body.school_id).eq("user_id",user.id).eq("active",true).single();
   const {data:profile}=await admin.from("profiles").select("platform_admin").eq("id",user.id).single();
   if(!profile?.platform_admin&&!["matrix_admin","school_admin","director"].includes(caller?.role||""))return new Response(JSON.stringify({error:"Sem permissão para convidar"}),{status:403,headers:{...corsHeaders,"Content-Type":"application/json"}});
-  const {data,error}=await admin.auth.admin.inviteUserByEmail(body.email,{data:{full_name:body.full_name},redirectTo:"https://caic-acolhe-app.vercel.app/login"});
+  const {data,error}=await admin.auth.admin.inviteUserByEmail(body.email,{data:{full_name:body.full_name},redirectTo:"https://acolhe.idealizandoedu.com.br/login"});
   if(error)throw error;if(!data.user)throw new Error("Usuário não criado");
   await admin.from("profiles").upsert({id:data.user.id,full_name:body.full_name,email:body.email});
   const {error:memberError}=await admin.from("school_memberships").upsert({school_id:body.school_id,user_id:data.user.id,role:body.role,active:true},{onConflict:"school_id,user_id"});
