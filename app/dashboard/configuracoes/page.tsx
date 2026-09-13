@@ -1,7 +1,8 @@
 "use client";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, GraduationCap, Pencil, UserPlus, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import { Building2, GraduationCap, Pencil, UserPlus, Trash2, X, Landmark } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/client";
 import "./settings.css";
@@ -90,7 +91,7 @@ export default function Configuracoes(){
 
  if(!school)return <main className="loading">Carregando configurações…</main>;
  return <AppShell email={email}>
-  <header><div><p className="eyebrow green">CONFIGURAÇÃO INICIAL</p><h1>Organização da escola</h1><p className="muted">Cadastre a estrutura e a equipe que utilizará a plataforma.</p></div></header>
+  <header><div><p className="eyebrow green">CONFIGURAÇÃO INICIAL</p><h1>Organização da escola</h1><p className="muted">Cadastre a estrutura e a equipe que utilizará a plataforma.</p></div>{platformAdmin&&<Link className="button-link" href="/dashboard/administracao"><Landmark/> Administração geral</Link>}</header>
   <div className="tabs">
    <button className={tab==="escola"?"selected":""} onClick={()=>setTab("escola")}><Building2/> Escola</button>
    <button className={tab==="turmas"?"selected":""} onClick={()=>setTab("turmas")}><GraduationCap/> Turmas</button>
