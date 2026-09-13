@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, Search, Trash2, UserRound, UsersRound, X } from "lucide-react";
 import AppShell from "@/components/app-shell";
+import StudentPdfImport from "@/components/student-pdf-import";
 import { createClient } from "@/lib/supabase/client";
 import "./students.css";
 
@@ -147,7 +148,10 @@ export default function AlunosETurmas() {
   return <AppShell email={email}>
     <header className="students-header">
       <div><p className="eyebrow green">ANO LETIVO 2026</p><h1>Alunos e turmas</h1><p className="muted">Organize os estudantes do {school.name} e seus responsáveis.</p></div>
-      <button className="primary-button" onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Cadastrar aluno</button>
+      <div className="students-header-actions">
+        <StudentPdfImport schoolId={school.id} classes={classes} existingStudents={students} onImported={load} />
+        <button className="primary-button" onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Cadastrar aluno</button>
+      </div>
     </header>
 
     {message && <div className="feedback" role="status">{message}</div>}
@@ -176,7 +180,7 @@ export default function AlunosETurmas() {
         <div><h2>Lista de alunos</h2><p className="muted">{filtered.length} {filtered.length === 1 ? "registro encontrado" : "registros encontrados"}</p></div>
         <div className="student-filters"><label className="search-box"><Search /><input aria-label="Pesquisar alunos" value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar aluno ou responsável" /></label><select aria-label="Filtrar por turma" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Todas as turmas</option>{classes.map(item => <option value={item.id} key={item.id}>{item.name} ({classCounts.get(item.id) || 0})</option>)}</select></div>
       </div>
-      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use o botão “Cadastrar aluno” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Família e responsável</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong>{student.enrollment_number && <small>Matrícula {student.enrollment_number}</small>}</td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span><b>Mãe:</b> {student.mother_name || "—"}</span><small><b>Pai:</b> {student.father_name || "—"}</small><small><b>Responsável:</b> {student.guardian_name || "—"}{student.guardian_phone ? ` · ${student.guardian_phone}` : ""}</small></td><td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td></tr>)}</tbody></table></div>}
+      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use “Cadastrar aluno” ou “Importar alunos por PDF” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Família e responsável</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong>{student.enrollment_number && <small>Matrícula {student.enrollment_number}</small>}</td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span><b>Mãe:</b> {student.mother_name || "—"}</span><small><b>Pai:</b> {student.father_name || "—"}</small><small><b>Responsável:</b> {student.guardian_name || "—"}{student.guardian_phone ? ` · ${student.guardian_phone}` : ""}</small></td><td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td></tr>)}</tbody></table></div>}
     </section>
   </AppShell>;
 }
