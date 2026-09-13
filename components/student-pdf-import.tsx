@@ -63,8 +63,8 @@ function titleName(value: string) {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("pt-BR").replace(/(^|[\s'-])([a-zà-ÿ])/g, (_, prefix, letter) => prefix + letter.toLocaleUpperCase("pt-BR"));
 }
 
-async function loadPdfJs() {
-  if (window.pdfjsLib) return window.pdfjsLib;
+async function loadPdfJs(): Promise<PdfJs> {
+  if (window.pdfjsLib) return window.pdfjsLib as PdfJs;
   await new Promise<void>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(`script[data-pdfjs='${PDFJS_VERSION}']`);
     if (existing) {
@@ -80,9 +80,10 @@ async function loadPdfJs() {
     script.onerror = () => reject(new Error("Falha ao carregar leitor de PDF."));
     document.head.appendChild(script);
   });
-  if (!window.pdfjsLib) throw new Error("Leitor de PDF indisponível.");
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-  return window.pdfjsLib;
+  const pdfjs = window.pdfjsLib as PdfJs | undefined;
+  if (!pdfjs) throw new Error("Leitor de PDF indisponível.");
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  return pdfjs;
 }
 
 function buildLines(items: PdfTextItem[]) {
