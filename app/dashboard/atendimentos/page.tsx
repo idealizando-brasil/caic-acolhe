@@ -1,23 +1,22 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FileHeart, LockKeyhole, Pencil, Plus, Search, UserRound, X } from "lucide-react";
+import { FileHeart, LockKeyhole, Plus, Search, UserRound, X } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/client";
 import "./attendances.css";
 
-type NoteType = "shared" | "confidential_psychology" | "confidential_social";
 type School = { id: string; name: string };
 type Student = { id: string; full_name: string; classes: { name: string } | null };
 type Referral = { id: string; student_id: string; reason_summary: string };
 type Appointment = { id: string; student_id: string; starts_at: string; kind: string; status: string };
-type Note = { id: string; student_id: string; referral_id: string | null; author_id: string; note_type: NoteType; content: string; created_at: string; updated_at: string; students: { full_name: string; classes: { name: string } | null } | null; profiles: { full_name: string | null; email: string } | null; referrals: { reason_summary: string } | null };
+type Attendance = { id: string; student_id: string; referral_id: string | null; author_id: string; guidance_referrals: string; created_at: string; students: { full_name: string; classes: { name: string } | null } | null; profiles: { full_name: string | null; email: string } | null; referrals: { reason_summary: string } | null };
+type PrivateDemand = { attendance_id: string; demand: string };
 
-const typeLabels: Record<NoteType, string> = { shared: "Registro compartilhado", confidential_psychology: "Sigiloso — Psicologia", confidential_social: "Sigiloso — Serviço Social" };
+const allowedRoles = ["director", "coordinator", "psychologist", "social_worker"];
+const emptyForm = { student_id: "", referral_id: "", appointment_id: "", demand: "", guidance_referrals: "", finishAppointment: true };
 const normalizeText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
-const emptyForm = { student_id: "", referral_id: "", appointment_id: "", note_type: "shared" as NoteType, content: "", finishAppointment: true };
 const dateTime = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "America/Fortaleza" });
 
 export default function Atendimentos() {
@@ -30,14 +29,13 @@ export default function Atendimentos() {
   const [students, setStudents] = useState<Student[]>([]);
   const [referrals, setReferrals] = useState<Referral[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [attendances, setAttendances] = useState<Attendance[]>([]);
+  const [privateDemands, setPrivateDemands] = useState<Record<string,string>>({});
   const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
   const [studentClassFilter, setStudentClassFilter] = useState("");
   const [search, setSearch] = useState("");
-  const [historyClassFilter, setHistoryClassFilter] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -49,69 +47,83 @@ export default function Atendimentos() {
     const rawSchool = membership?.schools as unknown;
     const current = (Array.isArray(rawSchool) ? rawSchool[0] : rawSchool) as School | undefined;
     if (!current) return;
-    setSchool(current); setRole(membership?.role || "");
-    const [{ data: studentData }, { data: referralData }, { data: appointmentData }, { data: noteData }] = await Promise.all([
+    const currentRole = membership?.role || "";
+    setSchool(current); setRole(currentRole);
+    if (!allowedRoles.includes(currentRole)) return;
+    const [{ data: studentData }, { data: referralData }, { data: appointmentData }, { data: attendanceData }, { data: demandData }] = await Promise.all([
       supabase.from("students").select("id,full_name,classes(name)").eq("school_id", current.id).eq("active", true).order("full_name"),
       supabase.from("referrals").select("id,student_id,reason_summary").eq("school_id", current.id).order("created_at", { ascending: false }),
       supabase.from("appointments").select("id,student_id,starts_at,kind,status").eq("school_id", current.id).eq("status", "scheduled").order("starts_at", { ascending: false }),
-      supabase.from("case_notes").select("id,student_id,referral_id,author_id,note_type,content,created_at,updated_at,students(full_name,classes(name)),profiles!case_notes_author_id_fkey(full_name,email),referrals(reason_summary)").eq("school_id", current.id).order("created_at", { ascending: false })
+      supabase.from("attendances").select("id,student_id,referral_id,author_id,guidance_referrals,created_at,students(full_name,classes(name)),profiles!attendances_author_id_fkey(full_name,email),referrals(reason_summary)").eq("school_id", current.id).order("created_at", { ascending: false }),
+      supabase.from("attendance_private_demands").select("attendance_id,demand").eq("school_id", current.id).eq("author_id", user.id)
     ]);
-    setStudents((studentData || []) as unknown as Student[]); setReferrals((referralData || []) as Referral[]); setAppointments((appointmentData || []) as Appointment[]); setNotes((noteData || []) as unknown as Note[]);
+    setStudents((studentData || []) as unknown as Student[]);
+    setReferrals((referralData || []) as Referral[]);
+    setAppointments((appointmentData || []) as Appointment[]);
+    setAttendances((attendanceData || []) as unknown as Attendance[]);
+    setPrivateDemands(Object.fromEntries(((demandData || []) as PrivateDemand[]).map(item => [item.attendance_id, item.demand])));
   }, [router, supabase]);
   useEffect(() => { load(); }, [load]);
 
-  const allowedTypes: NoteType[] = role === "psychologist" ? ["shared", "confidential_psychology"] : role === "social_worker" ? ["shared", "confidential_social"] : ["shared"];
-  const studentClasses = useMemo(() => Array.from(new Set(students.map(student => student.classes?.name).filter((name): name is string => Boolean(name)))).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [students]);
+  const studentClasses = useMemo(() => Array.from(new Set(students.map(student => student.classes?.name).filter((name): name is string => Boolean(name)))).sort((a,b)=>a.localeCompare(b,"pt-BR",{numeric:true})), [students]);
   const selectedStudent = useMemo(() => students.find(student => student.id === form.student_id) || null, [form.student_id, students]);
   const studentResults = useMemo(() => {
     const term = normalizeText(studentSearch.trim());
     if (!term && !studentClassFilter) return [];
-    return students.filter(student => {
-      const matchesName = !term || normalizeText(student.full_name).includes(term);
-      const matchesClass = !studentClassFilter || student.classes?.name === studentClassFilter;
-      return matchesName && matchesClass;
-    }).slice(0, 30);
+    return students.filter(student => (!term || normalizeText(student.full_name).includes(term)) && (!studentClassFilter || student.classes?.name === studentClassFilter)).slice(0,30);
   }, [studentClassFilter, studentSearch, students]);
   const filtered = useMemo(() => {
     const term = normalizeText(search.trim());
-    return notes.filter(note => (!historyClassFilter || note.students?.classes?.name === historyClassFilter) && (!term || normalizeText(`${note.students?.full_name || ""} ${note.content}`).includes(term)));
-  }, [historyClassFilter, notes, search]);
+    return attendances.filter(item => !term || normalizeText(`${item.students?.full_name || ""} ${item.guidance_referrals}`).includes(term));
+  }, [attendances, search]);
 
-  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); setStudentSearch(""); setStudentClassFilter(""); }
-  function editNote(note: Note) { const student=students.find(item=>item.id===note.student_id); setStudentSearch(student?.full_name||note.students?.full_name||""); setStudentClassFilter(student?.classes?.name||note.students?.classes?.name||""); setForm({ student_id: note.student_id, referral_id: note.referral_id || "", appointment_id: "", note_type: note.note_type, content: note.content, finishAppointment: false }); setEditingId(note.id); setShowForm(true); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" }); }
-  async function saveNote(event: FormEvent) {
-    event.preventDefault(); if (!school || !userId || !form.student_id || !form.content.trim() || !allowedTypes.includes(form.note_type)) return;
+  function closeForm() { setForm(emptyForm); setShowForm(false); setStudentSearch(""); setStudentClassFilter(""); }
+
+  async function saveAttendance(event: FormEvent) {
+    event.preventDefault();
+    if (!school || !userId || !allowedRoles.includes(role) || !form.student_id || !form.demand.trim() || !form.guidance_referrals.trim()) return;
     setBusy(true); setMessage("");
-    const values = { school_id: school.id, student_id: form.student_id, referral_id: form.referral_id || null, author_id: userId, note_type: form.note_type, content: form.content.trim(), updated_at: new Date().toISOString() };
-    const { error } = editingId ? await supabase.from("case_notes").update(values).eq("id", editingId).eq("author_id", userId) : await supabase.from("case_notes").insert(values);
-    if (error) setMessage("Não foi possível salvar o registro. Verifique sua permissão e tente novamente.");
-    else { if (!editingId && form.appointment_id && form.finishAppointment) await supabase.from("appointments").update({ status: "completed" }).eq("id", form.appointment_id); setMessage(editingId ? "Registro atualizado." : "Atendimento registrado com sucesso."); closeForm(); await load(); }
-    setBusy(false);
+    const { data: attendance, error: attendanceError } = await supabase.from("attendances").insert({
+      school_id: school.id, student_id: form.student_id, referral_id: form.referral_id || null,
+      appointment_id: form.appointment_id || null, author_id: userId, guidance_referrals: form.guidance_referrals.trim()
+    }).select("id").single();
+    if (attendanceError || !attendance) {
+      setMessage("Não foi possível salvar o atendimento. Verifique sua permissão e tente novamente."); setBusy(false); return;
+    }
+    const { error: demandError } = await supabase.from("attendance_private_demands").insert({
+      attendance_id: attendance.id, school_id: school.id, author_id: userId, demand: form.demand.trim()
+    });
+    if (demandError) {
+      await supabase.from("attendances").delete().eq("id", attendance.id).eq("author_id", userId);
+      setMessage("O atendimento não foi salvo porque a Escuta Ativa não pôde ser protegida. Tente novamente."); setBusy(false); return;
+    }
+    if (form.appointment_id && form.finishAppointment) await supabase.from("appointments").update({ status: "completed" }).eq("id", form.appointment_id);
+    setMessage("Atendimento registrado com sucesso."); closeForm(); await load(); setBusy(false);
   }
 
   if (!school) return <main className="loading">Carregando atendimentos…</main>;
+  if (!allowedRoles.includes(role)) return <AppShell email={email}><section className="card empty"><LockKeyhole /><h2>Acesso restrito</h2><p>Atendimentos são exclusivos da Direção, Coordenação Pedagógica, Psicologia e Assistência Social.</p></section></AppShell>;
+
   return <AppShell email={email}>
-    <header className="attendance-header"><div><p className="eyebrow green">HISTÓRICO DE ACOLHIMENTO</p><h1>Atendimentos</h1><p className="muted">Registre as ações realizadas e acompanhe a evolução dos estudantes.</p></div><button className="primary-button" disabled={!students.length} onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Registrar atendimento</button></header>
-    {!students.length && <div className="attendance-warning"><UserRound /><div><b>Os atendimentos serão liberados após o cadastro dos alunos.</b><p>Depois da importação do PDF, o histórico poderá ser iniciado.</p></div><Link href="/dashboard/alunos">Alunos e turmas</Link></div>}
+    <header className="attendance-header"><div><p className="eyebrow green">HISTÓRICO DE ACOLHIMENTO</p><h1>Atendimentos</h1><p className="muted">Escuta protegida e continuidade compartilhada entre a equipe autorizada.</p></div><button className="primary-button" disabled={!students.length} onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Registrar atendimento</button></header>
     {message && <div className="feedback" role="status">{message}</div>}
-    {showForm && <form className="card attendance-form" onSubmit={saveNote}><div className="form-heading"><div><h2>{editingId ? "Editar registro" : "Registrar atendimento"}</h2><p className="muted">Registre informações objetivas, necessárias e relacionadas ao acompanhamento.</p></div><button type="button" className="close-button" onClick={closeForm}><X /></button></div><div className="attendance-form-grid">
-      <div className="student-picker">
-        <span className="field-label">Aluno</span>
-        {selectedStudent ? <div className="selected-student"><div><strong>{selectedStudent.full_name}</strong><small>{selectedStudent.classes?.name || "Sem turma"}</small></div>{!editingId&&<button type="button" onClick={() => { setForm({ ...form, student_id: "", referral_id: "", appointment_id: "" }); setStudentSearch(""); }}>Trocar aluno</button>}</div> : <>
-          <select aria-label="Filtrar alunos por turma" value={studentClassFilter} onChange={e => setStudentClassFilter(e.target.value)}><option value="">Todas as turmas</option>{studentClasses.map(className => <option value={className} key={className}>{className}</option>)}</select>
-          <label className="student-search"><Search /><input value={studentSearch} onChange={e => setStudentSearch(e.target.value)} placeholder="Digite o nome do aluno" autoComplete="off" autoFocus /></label>
-          {!studentSearch.trim() && !studentClassFilter ? <p className="student-picker-help">Digite parte do nome ou escolha uma turma.</p> : <div className="student-results" role="listbox" aria-label="Alunos encontrados">{studentResults.length ? studentResults.map(student => <button type="button" role="option" aria-selected="false" key={student.id} onClick={() => { setForm({ ...form, student_id: student.id, referral_id: "", appointment_id: "" }); setStudentSearch(student.full_name); }}><strong>{student.full_name}</strong><small>{student.classes?.name || "Sem turma"}</small></button>) : <p>Nenhum aluno encontrado.</p>}{studentResults.length === 30 && <small className="results-limit">Mostrando os primeiros 30. Digite mais letras para refinar.</small>}</div>}
-        </>}
+    {showForm && <form className="card attendance-form" onSubmit={saveAttendance}>
+      <div className="form-heading"><div><h2>Registrar atendimento</h2><p className="muted">O atendimento possui dois campos com níveis de acesso diferentes.</p></div><button type="button" className="close-button" onClick={closeForm}><X /></button></div>
+      <div className="attendance-form-grid">
+        <div className="student-picker"><span className="field-label">Aluno</span>{selectedStudent ? <div className="selected-student"><div><strong>{selectedStudent.full_name}</strong><small>{selectedStudent.classes?.name || "Sem turma"}</small></div><button type="button" onClick={() => { setForm({...form,student_id:"",referral_id:"",appointment_id:""}); setStudentSearch(""); }}>Trocar aluno</button></div> : <><select value={studentClassFilter} onChange={e=>setStudentClassFilter(e.target.value)}><option value="">Todas as turmas</option>{studentClasses.map(c=><option value={c} key={c}>{c}</option>)}</select><label className="student-search"><Search /><input value={studentSearch} onChange={e=>setStudentSearch(e.target.value)} placeholder="Digite o nome do aluno" autoComplete="off" /></label><div className="student-results">{studentResults.map(student=><button type="button" key={student.id} onClick={()=>{setForm({...form,student_id:student.id,referral_id:"",appointment_id:""});setStudentSearch(student.full_name);}}><strong>{student.full_name}</strong><small>{student.classes?.name || "Sem turma"}</small></button>)}</div></>}</div>
+        <label>Encaminhamento relacionado<select value={form.referral_id} onChange={e=>setForm({...form,referral_id:e.target.value})}><option value="">Sem vínculo</option>{referrals.filter(r=>r.student_id===form.student_id).map(r=><option value={r.id} key={r.id}>{r.reason_summary.slice(0,80)}</option>)}</select></label>
+        <label>Agendamento relacionado<select value={form.appointment_id} onChange={e=>setForm({...form,appointment_id:e.target.value})}><option value="">Sem agendamento</option>{appointments.filter(a=>a.student_id===form.student_id).map(a=><option value={a.id} key={a.id}>{dateTime.format(new Date(a.starts_at))} — {a.kind}</option>)}</select></label>
+        <label className="content-field"><b>1. Escuta Ativa – Demanda</b><textarea rows={7} value={form.demand} onChange={e=>setForm({...form,demand:e.target.value})} required placeholder="Registre a escuta e a demanda apresentada." /><small>🔒 Sigiloso: somente você poderá visualizar este conteúdo depois de salvo.</small></label>
+        <label className="content-field"><b>2. Orientações e Encaminhamentos</b><textarea rows={7} value={form.guidance_referrals} onChange={e=>setForm({...form,guidance_referrals:e.target.value})} required placeholder="Registre orientações, providências e encaminhamentos necessários." /><small>Visível para Direção, Coordenação Pedagógica, Psicologia e Assistência Social.</small></label>
+        {form.appointment_id && <label className="check-field"><input type="checkbox" checked={form.finishAppointment} onChange={e=>setForm({...form,finishAppointment:e.target.checked})} /> Marcar o agendamento como concluído</label>}
       </div>
-      <label>Encaminhamento relacionado<select value={form.referral_id} onChange={e => setForm({ ...form, referral_id: e.target.value })}><option value="">Sem vínculo</option>{referrals.filter(item => item.student_id === form.student_id).map(item => <option value={item.id} key={item.id}>{item.reason_summary.slice(0, 80)}</option>)}</select></label>
-      {!editingId && <label>Agendamento relacionado<select value={form.appointment_id} onChange={e => setForm({ ...form, appointment_id: e.target.value })}><option value="">Sem agendamento</option>{appointments.filter(item => item.student_id === form.student_id).map(item => <option value={item.id} key={item.id}>{dateTime.format(new Date(item.starts_at))} — {item.kind}</option>)}</select></label>}
-      <label>Visibilidade<select value={form.note_type} onChange={e => setForm({ ...form, note_type: e.target.value as NoteType })}>{allowedTypes.map(type => <option value={type} key={type}>{typeLabels[type]}</option>)}</select></label>
-      <label className="content-field">Registro do atendimento<textarea rows={8} value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} required placeholder="Descreva o acolhimento, as orientações realizadas, os encaminhamentos combinados e os próximos passos." /></label>
-      {!editingId && form.appointment_id && <label className="check-field"><input type="checkbox" checked={form.finishAppointment} onChange={e => setForm({ ...form, finishAppointment: e.target.checked })} /> Marcar o agendamento como concluído</label>}
-    </div><div className="privacy-note"><LockKeyhole /><span>Registros sigilosos só podem ser visualizados pelo profissional da área que os criou.</span></div><div className="attendance-form-actions"><button type="button" className="secondary-button" onClick={closeForm}>Cancelar</button><button disabled={busy}>{busy ? "Salvando…" : "Salvar registro"}</button></div></form>}
-    <section className="attendance-summary"><article><FileHeart /><div><strong>{notes.length}</strong><span>registros de atendimento</span></div></article><article><UserRound /><div><strong>{new Set(notes.map(note => note.student_id)).size}</strong><span>estudantes acompanhados</span></div></article></section>
-    <section className="card attendance-card"><div className="attendance-toolbar"><div><h2>Histórico de atendimentos</h2><p className="muted">{filtered.length} {filtered.length === 1 ? "registro disponível" : "registros disponíveis"}</p></div><div className="attendance-filters"><label className="search-box"><Search /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar aluno ou conteúdo" /></label><select aria-label="Filtrar histórico por turma" value={historyClassFilter} onChange={e => setHistoryClassFilter(e.target.value)}><option value="">Todas as turmas</option>{studentClasses.map(className => <option value={className} key={className}>{className}</option>)}</select></div></div>
-      {!filtered.length ? <div className="empty"><FileHeart /><h3>Nenhum atendimento registrado</h3><p>Os registros realizados pela equipe aparecerão aqui.</p></div> : <div className="notes-list">{filtered.map(note => <article className={`note-item ${note.note_type !== "shared" ? "confidential" : ""}`} key={note.id}><div className="note-heading"><div><span className="note-type">{note.note_type !== "shared" && <LockKeyhole />}{typeLabels[note.note_type]}</span><h3>{note.students?.full_name || "Aluno"}</h3><small>{note.students?.classes?.name || "Sem turma"}</small></div>{note.author_id === userId && <button onClick={() => editNote(note)} title="Editar meu registro"><Pencil /></button>}</div><p className="note-content">{note.content}</p>{note.referrals?.reason_summary && <div className="note-referral"><b>Encaminhamento:</b> {note.referrals.reason_summary}</div>}<footer><span>Registrado por {note.profiles?.full_name || note.profiles?.email || "Profissional"}</span><time>{dateTime.format(new Date(note.created_at))}</time></footer></article>)}</div>}
+      <div className="privacy-note"><LockKeyhole /><span>A Escuta Ativa – Demanda é privativa do autor. Orientações e Encaminhamentos são compartilhados somente com a equipe autorizada.</span></div>
+      <div className="attendance-form-actions"><button type="button" className="secondary-button" onClick={closeForm}>Cancelar</button><button disabled={busy}>{busy ? "Salvando…" : "Salvar atendimento"}</button></div>
+    </form>}
+
+    <section className="attendance-summary"><article><FileHeart /><div><strong>{attendances.length}</strong><span>atendimentos</span></div></article><article><UserRound /><div><strong>{new Set(attendances.map(a=>a.student_id)).size}</strong><span>estudantes acompanhados</span></div></article></section>
+    <section className="card attendance-card"><div className="attendance-toolbar"><div><h2>Histórico de atendimentos</h2><p className="muted">{filtered.length} registros disponíveis</p></div><label className="search-box"><Search /><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Pesquisar aluno ou orientações" /></label></div>
+      {!filtered.length ? <div className="empty"><FileHeart /><h3>Nenhum atendimento registrado</h3><p>Os novos atendimentos aparecerão aqui.</p></div> : <div className="notes-list">{filtered.map(item=><article className="note-item" key={item.id}><div className="note-heading"><div><span className="note-type">Atendimento</span><h3>{item.students?.full_name || "Aluno"}</h3><small>{item.students?.classes?.name || "Sem turma"}</small></div></div>{item.author_id===userId ? <div className="note-referral"><b>1. Escuta Ativa – Demanda (somente você)</b><p className="note-content">{privateDemands[item.id] || "Conteúdo protegido."}</p></div> : <div className="privacy-note"><LockKeyhole /><span>Escuta Ativa – Demanda protegida pelo sigilo do profissional autor.</span></div>}<div className="note-referral"><b>2. Orientações e Encaminhamentos</b><p className="note-content">{item.guidance_referrals}</p></div>{item.referrals?.reason_summary && <div className="note-referral"><b>Encaminhamento relacionado:</b> {item.referrals.reason_summary}</div>}<footer><span>Registrado por {item.profiles?.full_name || item.profiles?.email || "Profissional"}</span><time>{dateTime.format(new Date(item.created_at))}</time></footer></article>)}</div>}
     </section>
   </AppShell>;
 }
