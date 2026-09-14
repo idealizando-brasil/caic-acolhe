@@ -23,6 +23,7 @@ export default function Configuracoes(){
  const [message,setMessage]=useState("");
  const [busy,setBusy]=useState(false);
  const [platformAdmin,setPlatformAdmin]=useState(false);
+ const [currentRole,setCurrentRole]=useState<string|null>(null);
  const [editing,setEditing]=useState<Member|null>(null);
  const [className,setClassName]=useState("");
  const [year,setYear]=useState(2026);
@@ -35,10 +36,11 @@ export default function Configuracoes(){
   if(!user){router.replace("/login");return}
   setEmail(user.email||"");
   const [{data:membership},{data:profile}]=await Promise.all([
-   supabase.from("school_memberships").select("school_id,schools(id,name,city,state)").eq("user_id",user.id).limit(1).single(),
+   supabase.from("school_memberships").select("school_id,role,schools(id,name,city,state)").eq("user_id",user.id).limit(1).single(),
    supabase.from("profiles").select("platform_admin").eq("id",user.id).single()
   ]);
   setPlatformAdmin(Boolean(profile?.platform_admin));
+  setCurrentRole(membership?.role||null);
   const raw=membership?.schools as unknown;
   const current=(Array.isArray(raw)?raw[0]:raw) as School|undefined;
   if(!current)return;
@@ -57,13 +59,16 @@ export default function Configuracoes(){
   const {error}=await supabase.from("schools").update({name:school.name,city:school.city,state:school.state}).eq("id",school.id);
   setMessage(error?"Não foi possível salvar.":"Dados da escola salvos.");setBusy(false);
  }
+ const canManageClasses=currentRole==="director";
+
  async function addClass(e:FormEvent){
-  e.preventDefault();if(!school||!className.trim())return;setBusy(true);
+  e.preventDefault();if(!school||!canManageClasses||!className.trim())return;setBusy(true);
   const {error}=await supabase.from("classes").insert({school_id:school.id,name:className.trim(),school_year:year});
   setMessage(error?error.message:"Turma cadastrada.");
   if(!error){setClassName("");await load()}setBusy(false);
  }
  async function removeClass(id:string){
+  if(!canManageClasses)return;
   if(!confirm("Remover esta turma?"))return;
   const {error}=await supabase.from("classes").delete().eq("id",id);
   setMessage(error?"A turma possui vínculos e não pode ser removida.":"Turma removida.");
@@ -104,8 +109,8 @@ export default function Configuracoes(){
    <div className="form-actions"><button disabled={busy}>{busy?"Salvando…":"Salvar alterações"}</button></div>
   </form>}
   {tab==="turmas"&&<div className="settings-stack">
-   <form className="card settings-card" onSubmit={addClass}><h2>Cadastrar turma</h2><div className="form-grid two"><label>Identificação da turma<input value={className} onChange={e=>setClassName(e.target.value)} placeholder="Ex.: 1º Ano A" required/></label><label>Ano letivo<input type="number" value={year} onChange={e=>setYear(Number(e.target.value))} min="2026" max="2100" required/></label></div><div className="form-actions"><button disabled={busy}>Adicionar turma</button></div></form>
-   <section className="card settings-card"><h2>Turmas cadastradas</h2>{classes.length===0?<div className="empty compact"><GraduationCap/><h3>Nenhuma turma cadastrada</h3></div>:<div className="data-list">{classes.map(c=><div key={c.id}><span><b>{c.name}</b><small>Ano letivo {c.school_year}</small></span><button className="danger-icon" onClick={()=>removeClass(c.id)} title="Remover"><Trash2/></button></div>)}</div>}</section>
+   {canManageClasses&&<form className="card settings-card" onSubmit={addClass}><h2>Cadastrar turma</h2><div className="form-grid two"><label>Identificação da turma<input value={className} onChange={e=>setClassName(e.target.value)} placeholder="Ex.: 1º Ano A" required/></label><label>Ano letivo<input type="number" value={year} onChange={e=>setYear(Number(e.target.value))} min="2026" max="2100" required/></label></div><div className="form-actions"><button disabled={busy}>Adicionar turma</button></div></form>}
+   <section className="card settings-card"><h2>Turmas cadastradas</h2>{!canManageClasses&&<p className="muted">Somente a Direção pode adicionar ou remover turmas.</p>}{classes.length===0?<div className="empty compact"><GraduationCap/><h3>Nenhuma turma cadastrada</h3></div>:<div className="data-list">{classes.map(c=><div key={c.id}><span><b>{c.name}</b><small>Ano letivo {c.school_year}</small></span>{canManageClasses&&<button className="danger-icon" onClick={()=>removeClass(c.id)} title="Remover"><Trash2/></button>}</div>)}</div>}</section>
   </div>}
   {tab==="equipe"&&<div className="settings-stack">
    <form className="card settings-card" onSubmit={invite}><h2>Convidar profissional</h2><p className="muted">A pessoa receberá um convite para criar o acesso.</p><div className="form-grid"><label>Nome completo<input value={fullName} onChange={e=>setFullName(e.target.value)} required/></label><label>E-mail<input type="email" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} required/></label><label>Função<select value={role} onChange={e=>setRole(e.target.value)}>{roles.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label></div><div className="form-actions"><button disabled={busy}>Enviar convite</button></div></form>
