@@ -22,6 +22,7 @@ type Referral = {
 
 const priorities: [Priority, string][] = [["routine", "Rotina"], ["attention", "Atenção"], ["urgent", "Urgente"]];
 const statuses: [Status, string][] = [["received", "Recebido"], ["triage", "Em triagem"], ["awaiting_schedule", "Aguardando agenda"], ["scheduled", "Agendado"], ["in_follow_up", "Em acompanhamento"], ["awaiting_school_action", "Aguardando ação da escola"], ["external_referral", "Encaminhado à rede"], ["completed", "Concluído"], ["reopened", "Reaberto"]];
+const normalizeText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const emptyForm = { student_id: "", assigned_to: "", reason_summary: "", priority: "routine" as Priority, status: "received" as Status, school_actions: "", due_date: "" };
 
 export default function Encaminhamentos() {
@@ -36,6 +37,8 @@ export default function Encaminhamentos() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentClassFilter, setStudentClassFilter] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [message, setMessage] = useState("");
@@ -70,12 +73,26 @@ export default function Encaminhamentos() {
     });
   }, [referrals, search, statusFilter]);
 
+  const studentClasses = useMemo(() => Array.from(new Set(students.map(student => student.classes?.name).filter((name): name is string => Boolean(name)))).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [students]);
+  const selectedStudent = useMemo(() => students.find(student => student.id === form.student_id) || null, [form.student_id, students]);
+  const studentResults = useMemo(() => {
+    const term = normalizeText(studentSearch.trim());
+    if (!term && !studentClassFilter) return [];
+    return students.filter(student => {
+      const matchesName = !term || normalizeText(student.full_name).includes(term);
+      const matchesClass = !studentClassFilter || student.classes?.name === studentClassFilter;
+      return matchesName && matchesClass;
+    }).slice(0, 30);
+  }, [studentClassFilter, studentSearch, students]);
+
   const activeCount = referrals.filter(item => item.status !== "completed").length;
   const urgentCount = referrals.filter(item => item.priority === "urgent" && item.status !== "completed").length;
 
-  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); }
+  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); setStudentSearch(""); setStudentClassFilter(""); }
   function editReferral(item: Referral) {
     setForm({ student_id: item.student_id, assigned_to: item.assigned_to || "", reason_summary: item.reason_summary, priority: item.priority, status: item.status, school_actions: item.school_actions || "", due_date: item.due_date || "" });
+    setStudentSearch(item.students?.full_name || "");
+    setStudentClassFilter(item.students?.classes?.name || "");
     setEditingId(item.id); setShowForm(true); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -118,7 +135,20 @@ export default function Encaminhamentos() {
     {showForm && <form className="card referral-form" onSubmit={saveReferral}>
       <div className="form-heading"><div><h2>{editingId ? "Editar encaminhamento" : "Novo encaminhamento"}</h2><p className="muted">Registre apenas informações necessárias ao acolhimento.</p></div><button type="button" className="close-button" onClick={closeForm}><X /></button></div>
       <div className="referral-form-grid">
-        <label>Aluno<select value={form.student_id} onChange={e => setForm({ ...form, student_id: e.target.value })} required disabled={Boolean(editingId)}><option value="">Selecione o aluno</option>{students.map(student => <option value={student.id} key={student.id}>{student.full_name}{student.classes?.name ? ` — ${student.classes.name}` : ""}</option>)}</select></label>
+        <div className="student-picker">
+          <span className="field-label">Aluno</span>
+          {selectedStudent ? <div className="selected-student"><div><strong>{selectedStudent.full_name}</strong><small>{selectedStudent.classes?.name || "Sem turma"}</small></div>{!editingId && <button type="button" onClick={() => { setForm({ ...form, student_id: "" }); setStudentSearch(""); }}>Trocar aluno</button>}</div> : <>
+            <select aria-label="Filtrar alunos por turma" value={studentClassFilter} onChange={e => setStudentClassFilter(e.target.value)}>
+              <option value="">Todas as turmas</option>
+              {studentClasses.map(className => <option value={className} key={className}>{className}</option>)}
+            </select>
+            <label className="student-search"><Search /><input value={studentSearch} onChange={e => setStudentSearch(e.target.value)} placeholder="Digite o nome do aluno" autoComplete="off" autoFocus /></label>
+            {!studentSearch.trim() && !studentClassFilter ? <p className="student-picker-help">Digite parte do nome ou escolha uma turma.</p> : <div className="student-results" role="listbox" aria-label="Alunos encontrados">
+              {studentResults.length ? studentResults.map(student => <button type="button" role="option" aria-selected="false" key={student.id} onClick={() => { setForm({ ...form, student_id: student.id }); setStudentSearch(student.full_name); }}><strong>{student.full_name}</strong><small>{student.classes?.name || "Sem turma"}</small></button>) : <p>Nenhum aluno encontrado.</p>}
+              {studentResults.length === 30 && <small className="results-limit">Mostrando os primeiros 30. Digite mais letras para refinar.</small>}
+            </div>}
+          </>}
+        </div>
         <label>Prioridade<select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value as Priority })}>{priorities.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label>Andamento<select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as Status })}>{statuses.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <label>Responsável pelo acompanhamento<select value={form.assigned_to} onChange={e => setForm({ ...form, assigned_to: e.target.value })}><option value="">Ainda não definido</option>{professionals.map(person => <option value={person.user_id} key={person.user_id}>{person.profiles?.full_name || person.profiles?.email || "Profissional"}</option>)}</select></label>
