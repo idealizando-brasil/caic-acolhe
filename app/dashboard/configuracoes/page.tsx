@@ -55,11 +55,12 @@ export default function Configuracoes(){
  useEffect(()=>{void load()},[load]);
 
  async function saveSchool(e:FormEvent){
-  e.preventDefault();if(!school)return;setBusy(true);setMessage("");
+  e.preventDefault();if(!school||!canManageSchool)return;setBusy(true);setMessage("");
   const {error}=await supabase.from("schools").update({name:school.name,city:school.city,state:school.state}).eq("id",school.id);
   setMessage(error?"Não foi possível salvar.":"Dados da escola salvos.");setBusy(false);
  }
- const canManageClasses=currentRole==="director";
+ const canManageSchool=currentRole==="director";
+ const canManageClasses=canManageSchool;
 
  async function addClass(e:FormEvent){
   e.preventDefault();if(!school||!canManageClasses||!className.trim())return;setBusy(true);
@@ -75,7 +76,7 @@ export default function Configuracoes(){
   if(!error)await load();
  }
  async function invite(e:FormEvent){
-  e.preventDefault();if(!school)return;setBusy(true);setMessage("");
+  e.preventDefault();if(!school||!canManageSchool)return;setBusy(true);setMessage("");
   const {error}=await supabase.functions.invoke("invite-user",{body:{email:inviteEmail,full_name:fullName,role,school_id:school.id}});
   setMessage(error?"Não foi possível convidar. Verifique se o e-mail já está cadastrado.":"Convite enviado e profissional adicionado.");
   if(!error){setInviteEmail("");setFullName("");await load()}setBusy(false);
@@ -104,16 +105,16 @@ export default function Configuracoes(){
   </div>
   {message&&<div className="feedback">{message}</div>}
   {tab==="escola"&&<form className="card settings-card" onSubmit={saveSchool}>
-   <h2>Dados da escola</h2><p className="muted">Informações exibidas no ambiente institucional.</p>
-   <div className="form-grid"><label>Nome da escola<input value={school.name} onChange={e=>setSchool({...school,name:e.target.value})} required/></label><label>Cidade<input value={school.city||""} onChange={e=>setSchool({...school,city:e.target.value})}/></label><label>Estado<input maxLength={2} value={school.state||""} onChange={e=>setSchool({...school,state:e.target.value.toUpperCase()})} placeholder="CE"/></label></div>
-   <div className="form-actions"><button disabled={busy}>{busy?"Salvando…":"Salvar alterações"}</button></div>
+   <h2>Dados da escola</h2><p className="muted">{canManageSchool?"Informações exibidas no ambiente institucional.":"Somente a Direção pode alterar os dados da escola."}</p>
+   <div className="form-grid"><label>Nome da escola<input value={school.name} disabled={!canManageSchool} onChange={e=>setSchool({...school,name:e.target.value})} required/></label><label>Cidade<input value={school.city||""} disabled={!canManageSchool} onChange={e=>setSchool({...school,city:e.target.value})}/></label><label>Estado<input maxLength={2} value={school.state||""} disabled={!canManageSchool} onChange={e=>setSchool({...school,state:e.target.value.toUpperCase()})} placeholder="CE"/></label></div>
+   {canManageSchool&&<div className="form-actions"><button disabled={busy}>{busy?"Salvando…":"Salvar alterações"}</button></div>}
   </form>}
   {tab==="turmas"&&<div className="settings-stack">
    {canManageClasses&&<form className="card settings-card" onSubmit={addClass}><h2>Cadastrar turma</h2><div className="form-grid two"><label>Identificação da turma<input value={className} onChange={e=>setClassName(e.target.value)} placeholder="Ex.: 1º Ano A" required/></label><label>Ano letivo<input type="number" value={year} onChange={e=>setYear(Number(e.target.value))} min="2026" max="2100" required/></label></div><div className="form-actions"><button disabled={busy}>Adicionar turma</button></div></form>}
    <section className="card settings-card"><h2>Turmas cadastradas</h2>{!canManageClasses&&<p className="muted">Somente a Direção pode adicionar ou remover turmas.</p>}{classes.length===0?<div className="empty compact"><GraduationCap/><h3>Nenhuma turma cadastrada</h3></div>:<div className="data-list">{classes.map(c=><div key={c.id}><span><b>{c.name}</b><small>Ano letivo {c.school_year}</small></span>{canManageClasses&&<button className="danger-icon" onClick={()=>removeClass(c.id)} title="Remover"><Trash2/></button>}</div>)}</div>}</section>
   </div>}
   {tab==="equipe"&&<div className="settings-stack">
-   <form className="card settings-card" onSubmit={invite}><h2>Convidar profissional</h2><p className="muted">A pessoa receberá um convite para criar o acesso.</p><div className="form-grid"><label>Nome completo<input value={fullName} onChange={e=>setFullName(e.target.value)} required/></label><label>E-mail<input type="email" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} required/></label><label>Função<select value={role} onChange={e=>setRole(e.target.value)}>{roles.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label></div><div className="form-actions"><button disabled={busy}>Enviar convite</button></div></form>
+   {canManageSchool?<form className="card settings-card" onSubmit={invite}><h2>Convidar profissional</h2><p className="muted">A pessoa receberá um convite para criar o acesso.</p><div className="form-grid"><label>Nome completo<input value={fullName} onChange={e=>setFullName(e.target.value)} required/></label><label>E-mail<input type="email" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} required/></label><label>Função<select value={role} onChange={e=>setRole(e.target.value)}>{roles.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label></div><div className="form-actions"><button disabled={busy}>Enviar convite</button></div></form>:<section className="card settings-card"><h2>Equipe cadastrada</h2><p className="muted">Somente a Direção pode enviar convites para novos usuários.</p></section>}
    {editing?.profiles&&<form className="card settings-card" onSubmit={updateMember}>
     <div className="settings-title"><div><h2>Editar usuário</h2><p className="muted">Atualize os dados e a função deste profissional.</p></div><button type="button" className="icon-button" onClick={()=>setEditing(null)}><X/></button></div>
     <div className="form-grid"><label>Nome completo<input value={editing.profiles.full_name||""} onChange={e=>setEditing({...editing,profiles:{...editing.profiles!,full_name:e.target.value}})} required/></label><label>E-mail<input type="email" value={editing.profiles.email} onChange={e=>setEditing({...editing,profiles:{...editing.profiles!,email:e.target.value}})} required/></label><label>Função<select value={editing.role} onChange={e=>setEditing({...editing,role:e.target.value})}>{roles.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label></div>
