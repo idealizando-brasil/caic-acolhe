@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarDays, CheckCircle2, Clock3, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock3, Pencil, Plus, Search, Trash2, UserRound, X } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/client";
 import "./agenda.css";
@@ -16,6 +16,7 @@ type Appointment = { id: string; student_id: string; referral_id: string | null;
 
 const roleLabels: Record<string, string> = { matrix_admin: "Administração", school_admin: "Administração", director: "Direção", coordinator: "Coordenação", psychologist: "Psicologia", social_worker: "Serviço Social" };
 const statusLabels: Record<string, string> = { scheduled: "Agendado", completed: "Concluído", cancelled: "Cancelado", absent: "Não compareceu" };
+const normalizeText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
 const emptyForm = { student_id: "", referral_id: "", professional_id: "", date: "", time: "08:00", duration: "50", kind: "Acolhimento individual", location: "Sala da Equipe Multiprofissional" };
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "America/Fortaleza" });
 const timeFormatter = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Fortaleza" });
@@ -32,6 +33,8 @@ export default function Agenda() {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentClassFilter, setStudentClassFilter] = useState("");
   const [view, setView] = useState<"upcoming" | "all">("upcoming");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,14 +67,28 @@ export default function Agenda() {
     const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
     return appointments.filter(item => new Date(item.starts_at) >= startOfToday && item.status === "scheduled");
   }, [appointments, view]);
+  const studentClasses = useMemo(() => Array.from(new Set(students.map(student => student.classes?.name).filter((name): name is string => Boolean(name)))).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [students]);
+  const selectedStudent = useMemo(() => students.find(student => student.id === form.student_id) || null, [form.student_id, students]);
+  const studentResults = useMemo(() => {
+    const term = normalizeText(studentSearch.trim());
+    if (!term && !studentClassFilter) return [];
+    return students.filter(student => {
+      const matchesName = !term || normalizeText(student.full_name).includes(term);
+      const matchesClass = !studentClassFilter || student.classes?.name === studentClassFilter;
+      return matchesName && matchesClass;
+    }).slice(0, 30);
+  }, [studentClassFilter, studentSearch, students]);
+
   const todayCount = appointments.filter(item => new Date(item.starts_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" }) === new Date().toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" }) && item.status === "scheduled").length;
 
-  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); }
+  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); setStudentSearch(""); setStudentClassFilter(""); }
   function editAppointment(item: Appointment) {
     const start = new Date(item.starts_at); const end = new Date(item.ends_at);
     const localParts = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/Fortaleza" }).formatToParts(start);
     const part = (type: string) => localParts.find(row => row.type === type)?.value || "";
     setForm({ student_id: item.student_id, referral_id: item.referral_id || "", professional_id: item.professional_id, date: `${part("year")}-${part("month")}-${part("day")}`, time: `${part("hour")}:${part("minute")}`, duration: String(Math.round((end.getTime() - start.getTime()) / 60000)), kind: item.kind, location: item.location || "" });
+    setStudentSearch(item.students?.full_name || "");
+    setStudentClassFilter(item.students?.classes?.name || "");
     setEditingId(item.id); setShowForm(true); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -110,7 +127,20 @@ export default function Agenda() {
     {!students.length && <div className="agenda-warning"><UserRound /><div><b>A agenda será liberada após o cadastro dos alunos.</b><p>O senhor poderá enviar o PDF das turmas para a importação automática.</p></div><Link href="/dashboard/alunos">Alunos e turmas</Link></div>}
     {message && <div className="feedback" role="status">{message}</div>}
     {showForm && <form className="card appointment-form" onSubmit={saveAppointment}><div className="form-heading"><div><h2>{editingId ? "Editar agendamento" : "Agendar atendimento"}</h2><p className="muted">Defina quem será atendido, quando e por qual profissional.</p></div><button type="button" className="close-button" onClick={closeForm}><X /></button></div><div className="appointment-form-grid">
-      <label>Aluno<select value={form.student_id} onChange={e => setForm({ ...form, student_id: e.target.value, referral_id: "" })} required><option value="">Selecione o aluno</option>{students.map(student => <option value={student.id} key={student.id}>{student.full_name}{student.classes?.name ? ` — ${student.classes.name}` : ""}</option>)}</select></label>
+      <div className="student-picker">
+        <span className="field-label">Aluno</span>
+        {selectedStudent ? <div className="selected-student"><div><strong>{selectedStudent.full_name}</strong><small>{selectedStudent.classes?.name || "Sem turma"}</small></div><button type="button" onClick={() => { setForm({ ...form, student_id: "", referral_id: "" }); setStudentSearch(""); }}>Trocar aluno</button></div> : <>
+          <select aria-label="Filtrar alunos por turma" value={studentClassFilter} onChange={e => setStudentClassFilter(e.target.value)}>
+            <option value="">Todas as turmas</option>
+            {studentClasses.map(className => <option value={className} key={className}>{className}</option>)}
+          </select>
+          <label className="student-search"><Search /><input value={studentSearch} onChange={e => setStudentSearch(e.target.value)} placeholder="Digite o nome do aluno" autoComplete="off" autoFocus /></label>
+          {!studentSearch.trim() && !studentClassFilter ? <p className="student-picker-help">Digite parte do nome ou escolha uma turma.</p> : <div className="student-results" role="listbox" aria-label="Alunos encontrados">
+            {studentResults.length ? studentResults.map(student => <button type="button" role="option" aria-selected="false" key={student.id} onClick={() => { setForm({ ...form, student_id: student.id, referral_id: "" }); setStudentSearch(student.full_name); }}><strong>{student.full_name}</strong><small>{student.classes?.name || "Sem turma"}</small></button>) : <p>Nenhum aluno encontrado.</p>}
+            {studentResults.length === 30 && <small className="results-limit">Mostrando os primeiros 30. Digite mais letras para refinar.</small>}
+          </div>}
+        </>}
+      </div>
       <label>Profissional<select value={form.professional_id} onChange={e => setForm({ ...form, professional_id: e.target.value })} required><option value="">Selecione o profissional</option>{professionals.map(person => <option value={person.user_id} key={person.user_id}>{person.profiles?.full_name || person.profiles?.email} — {roleLabels[person.role]}</option>)}</select></label>
       <label>Encaminhamento relacionado<select value={form.referral_id} onChange={e => setForm({ ...form, referral_id: e.target.value })}><option value="">Sem vínculo</option>{referrals.filter(item => item.student_id === form.student_id).map(item => <option value={item.id} key={item.id}>{item.reason_summary.slice(0, 70)}</option>)}</select></label>
       <label>Data<input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required /></label><label>Horário<input type="time" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} required /></label><label>Duração<select value={form.duration} onChange={e => setForm({ ...form, duration: e.target.value })}><option value="30">30 minutos</option><option value="50">50 minutos</option><option value="60">1 hora</option><option value="90">1h30</option></select></label>
