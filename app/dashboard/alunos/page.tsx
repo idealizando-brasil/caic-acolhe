@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import "./students.css";
 
 type School = { id: string; name: string };
+type Role = "matrix_admin" | "school_admin" | "director" | "coordinator" | "psychologist" | "social_worker" | "teacher";
 type ClassRow = { id: string; name: string; school_year: number };
 type StudentRow = {
   id: string;
@@ -30,6 +31,7 @@ export default function AlunosETurmas() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [school, setSchool] = useState<School | null>(null);
+  const [role, setRole] = useState<Role | null>(null);
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [search, setSearch] = useState("");
@@ -46,7 +48,7 @@ export default function AlunosETurmas() {
     setEmail(user.email || "");
     const { data: membership } = await supabase
       .from("school_memberships")
-      .select("school_id,schools(id,name)")
+      .select("school_id,role,schools(id,name)")
       .eq("user_id", user.id)
       .eq("active", true)
       .limit(1)
@@ -55,6 +57,7 @@ export default function AlunosETurmas() {
     const current = (Array.isArray(rawSchool) ? rawSchool[0] : rawSchool) as School | undefined;
     if (!current) return;
     setSchool(current);
+    setRole((membership?.role || null) as Role | null);
     const [{ data: classData }, { data: studentData }] = await Promise.all([
       supabase.from("classes").select("id,name,school_year").eq("school_id", current.id).eq("active", true).order("school_year", { ascending: false }).order("name"),
       supabase.from("students").select("id,enrollment_number,full_name,birth_date,mother_name,father_name,guardian_name,guardian_phone,class_id,classes(name,school_year)").eq("school_id", current.id).eq("active", true).order("full_name")
@@ -82,6 +85,8 @@ export default function AlunosETurmas() {
     return counts;
   }, [students]);
 
+  const canManageStudents = role === "director" || role === "coordinator";
+
   function closeForm() {
     setForm(emptyForm);
     setEditingId(null);
@@ -89,6 +94,7 @@ export default function AlunosETurmas() {
   }
 
   function editStudent(student: StudentRow) {
+    if (!canManageStudents) return;
     setForm({
       full_name: student.full_name,
       birth_date: student.birth_date || "",
@@ -106,7 +112,7 @@ export default function AlunosETurmas() {
 
   async function saveStudent(event: FormEvent) {
     event.preventDefault();
-    if (!school || !form.full_name.trim() || !form.class_id) return;
+    if (!school || !canManageStudents || !form.full_name.trim() || !form.class_id) return;
     setBusy(true);
     setMessage("");
     const values = {
@@ -134,7 +140,7 @@ export default function AlunosETurmas() {
   }
 
   async function removeStudent(student: StudentRow) {
-    if (!school || !confirm(`Excluir o cadastro de ${student.full_name}?`)) return;
+    if (!school || !canManageStudents || !confirm(`Excluir o cadastro de ${student.full_name}?`)) return;
     setBusy(true);
     setMessage("");
     const { error } = await supabase.from("students").delete().eq("id", student.id).eq("school_id", school.id);
@@ -148,15 +154,15 @@ export default function AlunosETurmas() {
   return <AppShell email={email}>
     <header className="students-header">
       <div><p className="eyebrow green">ANO LETIVO 2026</p><h1>Alunos e turmas</h1><p className="muted">Organize os estudantes do {school.name} e seus responsáveis.</p></div>
-      <div className="students-header-actions">
+      {canManageStudents && <div className="students-header-actions">
         <StudentPdfImport schoolId={school.id} classes={classes} existingStudents={students} onImported={load} />
         <button className="primary-button" onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Cadastrar aluno</button>
-      </div>
+      </div>}
     </header>
 
     {message && <div className="feedback" role="status">{message}</div>}
 
-    {showForm && <form className="card student-form" onSubmit={saveStudent}>
+    {showForm && canManageStudents && <form className="card student-form" onSubmit={saveStudent}>
       <div className="form-heading"><div><h2>{editingId ? "Editar aluno" : "Cadastrar aluno"}</h2><p className="muted">Preencha os dados básicos e selecione a turma.</p></div><button type="button" className="close-button" onClick={closeForm} title="Fechar"><X /></button></div>
       <div className="student-form-grid">
         <label>Nome completo<input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} required autoFocus /></label>
@@ -180,7 +186,7 @@ export default function AlunosETurmas() {
         <div><h2>Lista de alunos</h2><p className="muted">{filtered.length} {filtered.length === 1 ? "registro encontrado" : "registros encontrados"}</p></div>
         <div className="student-filters"><label className="search-box"><Search /><input aria-label="Pesquisar alunos" value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar aluno ou responsável" /></label><select aria-label="Filtrar por turma" value={classFilter} onChange={e => setClassFilter(e.target.value)}><option value="">Todas as turmas</option>{classes.map(item => <option value={item.id} key={item.id}>{item.name} ({classCounts.get(item.id) || 0})</option>)}</select></div>
       </div>
-      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use “Cadastrar aluno” ou “Importar alunos por PDF” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Família e responsável</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong>{student.enrollment_number && <small>Matrícula {student.enrollment_number}</small>}</td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span><b>Mãe:</b> {student.mother_name || "—"}</span><small><b>Pai:</b> {student.father_name || "—"}</small><small><b>Responsável:</b> {student.guardian_name || "—"}{student.guardian_phone ? ` · ${student.guardian_phone}` : ""}</small></td><td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td></tr>)}</tbody></table></div>}
+      {filtered.length === 0 ? <div className="empty"><UsersRound /><h3>{students.length ? "Nenhum aluno encontrado" : "Nenhum aluno cadastrado"}</h3><p>{students.length ? "Altere a pesquisa ou o filtro de turma." : "Use “Cadastrar aluno” ou “Importar alunos por PDF” para começar."}</p></div> : <div className="students-table-wrap"><table className="students-table"><thead><tr><th>Aluno</th><th>Turma</th><th>Nascimento</th><th>Família e responsável</th>{canManageStudents && <th><span className="sr-only">Ações</span></th>}</tr></thead><tbody>{filtered.map(student => <tr key={student.id}><td><strong>{student.full_name}</strong>{student.enrollment_number && <small>Matrícula {student.enrollment_number}</small>}</td><td>{student.classes ? `${student.classes.name} · ${student.classes.school_year}` : "Sem turma"}</td><td>{student.birth_date ? new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(`${student.birth_date}T12:00:00Z`)) : "—"}</td><td><span><b>Mãe:</b> {student.mother_name || "—"}</span><small><b>Pai:</b> {student.father_name || "—"}</small><small><b>Responsável:</b> {student.guardian_name || "—"}{student.guardian_phone ? ` · ${student.guardian_phone}` : ""}</small></td>{canManageStudents && <td><div className="row-actions"><button onClick={() => editStudent(student)} title="Editar aluno"><Pencil /></button><button className="delete" disabled={busy} onClick={() => removeStudent(student)} title="Excluir aluno"><Trash2 /></button></div></td>}</tr>)}</tbody></table></div>}
     </section>
   </AppShell>;
 }
