@@ -1,155 +1,50 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarDays, CheckCircle2, Clock3, Pencil, Plus, Search, Trash2, UserRound, X } from "lucide-react";
+import { CalendarDays, CheckCircle2, Clock3, Pencil, Plus, UserRound, X } from "lucide-react";
 import AppShell from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/client";
+import { appointmentStatusLabels, appointmentTypeLabels, canDecideCancellation, canOperateSchedule } from "./flow-rules";
 import "./agenda.css";
 
-type School = { id: string; name: string };
-type Student = { id: string; full_name: string; classes: { name: string } | null };
-type Professional = { user_id: string; role: string; profiles: { full_name: string | null; email: string } | null };
-type Referral = { id: string; student_id: string; reason_summary: string };
-type Appointment = { id: string; student_id: string; referral_id: string | null; professional_id: string; starts_at: string; ends_at: string; kind: string; status: string; location: string | null; students: { full_name: string; classes: { name: string } | null } | null; profiles: { full_name: string | null; email: string } | null };
+type School={id:string;name:string};
+type Student={id:string;full_name:string;classes:{name:string}|null};
+type Referral={id:string;student_id:string;reason_summary:string;status:string;students:{full_name:string;classes:{name:string}|null}|null};
+type Appointment={id:string;student_id:string;referral_id:string;professional_id:string;starts_at:string;ends_at:string;kind:string;status:string;location:string|null;appointment_type:string;cancellation_reason:string|null;cancellation_decision:string|null;students:{full_name:string;classes:{name:string}|null}|null;profiles:{full_name:string|null;email:string}|null};
+const emptyForm={referral_id:"",date:"",time:"08:00",duration:"50",kind:"Acolhimento individual",location:"Sala da Equipe Multiprofissional",appointment_type:"initial"};
+const dateFmt=new Intl.DateTimeFormat("pt-BR",{weekday:"short",day:"2-digit",month:"short",year:"numeric",timeZone:"America/Fortaleza"});
+const timeFmt=new Intl.DateTimeFormat("pt-BR",{hour:"2-digit",minute:"2-digit",timeZone:"America/Fortaleza"});
 
-const roleLabels: Record<string, string> = { matrix_admin: "Administração", school_admin: "Administração", director: "Direção", coordinator: "Coordenação", psychologist: "Psicologia", social_worker: "Serviço Social" };
-const statusLabels: Record<string, string> = { scheduled: "Agendado", completed: "Concluído", cancelled: "Cancelado", absent: "Não compareceu" };
-const normalizeText = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
-const emptyForm = { student_id: "", referral_id: "", professional_id: "", date: "", time: "08:00", duration: "50", kind: "Acolhimento individual", location: "Sala da Equipe Multiprofissional" };
-const dateFormatter = new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit", month: "short", year: "numeric", timeZone: "America/Fortaleza" });
-const timeFormatter = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Fortaleza" });
-
-export default function Agenda() {
-  const [supabase] = useState(() => createClient());
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [school, setSchool] = useState<School | null>(null);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [professionals, setProfessionals] = useState<Professional[]>([]);
-  const [referrals, setReferrals] = useState<Referral[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [studentSearch, setStudentSearch] = useState("");
-  const [studentClassFilter, setStudentClassFilter] = useState("");
-  const [view, setView] = useState<"upcoming" | "all">("upcoming");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.replace("/login"); return; }
-    setEmail(user.email || "");
-    const { data: membership } = await supabase.from("school_memberships").select("school_id,schools(id,name)").eq("user_id", user.id).eq("active", true).limit(1).single();
-    const rawSchool = membership?.schools as unknown;
-    const current = (Array.isArray(rawSchool) ? rawSchool[0] : rawSchool) as School | undefined;
-    if (!current) return;
-    setSchool(current);
-    const [{ data: studentData }, { data: professionalData }, { data: referralData }, { data: appointmentData }] = await Promise.all([
-      supabase.from("students").select("id,full_name,classes(name)").eq("school_id", current.id).eq("active", true).order("full_name"),
-      supabase.from("school_memberships").select("user_id,role,profiles(full_name,email)").eq("school_id", current.id).eq("active", true).in("role", ["matrix_admin", "school_admin", "director", "coordinator", "psychologist", "social_worker"]),
-      supabase.from("referrals").select("id,student_id,reason_summary").eq("school_id", current.id).neq("status", "completed").order("created_at", { ascending: false }),
-      supabase.from("appointments").select("id,student_id,referral_id,professional_id,starts_at,ends_at,kind,status,location,students(full_name,classes(name)),profiles!appointments_professional_id_fkey(full_name,email)").eq("school_id", current.id).order("starts_at")
-    ]);
-    setStudents((studentData || []) as unknown as Student[]);
-    setProfessionals((professionalData || []) as unknown as Professional[]);
-    setReferrals((referralData || []) as Referral[]);
-    setAppointments((appointmentData || []) as unknown as Appointment[]);
-  }, [router, supabase]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const visibleAppointments = useMemo(() => {
-    if (view === "all") return appointments;
-    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
-    return appointments.filter(item => new Date(item.starts_at) >= startOfToday && item.status === "scheduled");
-  }, [appointments, view]);
-  const studentClasses = useMemo(() => Array.from(new Set(students.map(student => student.classes?.name).filter((name): name is string => Boolean(name)))).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [students]);
-  const selectedStudent = useMemo(() => students.find(student => student.id === form.student_id) || null, [form.student_id, students]);
-  const studentResults = useMemo(() => {
-    const term = normalizeText(studentSearch.trim());
-    if (!term && !studentClassFilter) return [];
-    return students.filter(student => {
-      const matchesName = !term || normalizeText(student.full_name).includes(term);
-      const matchesClass = !studentClassFilter || student.classes?.name === studentClassFilter;
-      return matchesName && matchesClass;
-    }).slice(0, 30);
-  }, [studentClassFilter, studentSearch, students]);
-
-  const todayCount = appointments.filter(item => new Date(item.starts_at).toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" }) === new Date().toLocaleDateString("pt-BR", { timeZone: "America/Fortaleza" }) && item.status === "scheduled").length;
-
-  function closeForm() { setForm(emptyForm); setEditingId(null); setShowForm(false); setStudentSearch(""); setStudentClassFilter(""); }
-  function editAppointment(item: Appointment) {
-    const start = new Date(item.starts_at); const end = new Date(item.ends_at);
-    const localParts = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "America/Fortaleza" }).formatToParts(start);
-    const part = (type: string) => localParts.find(row => row.type === type)?.value || "";
-    setForm({ student_id: item.student_id, referral_id: item.referral_id || "", professional_id: item.professional_id, date: `${part("year")}-${part("month")}-${part("day")}`, time: `${part("hour")}:${part("minute")}`, duration: String(Math.round((end.getTime() - start.getTime()) / 60000)), kind: item.kind, location: item.location || "" });
-    setStudentSearch(item.students?.full_name || "");
-    setStudentClassFilter(item.students?.classes?.name || "");
-    setEditingId(item.id); setShowForm(true); setMessage(""); window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  async function saveAppointment(event: FormEvent) {
-    event.preventDefault();
-    if (!school || !form.student_id || !form.professional_id || !form.date || !form.time) return;
-    setBusy(true); setMessage("");
-    const start = new Date(`${form.date}T${form.time}:00`); const end = new Date(start.getTime() + Number(form.duration) * 60000);
-    const conflictQuery = supabase.from("appointments").select("id").eq("school_id", school.id).eq("professional_id", form.professional_id).eq("status", "scheduled").lt("starts_at", end.toISOString()).gt("ends_at", start.toISOString());
-    const { data: conflicts } = editingId ? await conflictQuery.neq("id", editingId) : await conflictQuery;
-    if (conflicts?.length) { setMessage("Este profissional já possui atendimento nesse horário."); setBusy(false); return; }
-    const values = { school_id: school.id, student_id: form.student_id, referral_id: form.referral_id || null, professional_id: form.professional_id, starts_at: start.toISOString(), ends_at: end.toISOString(), kind: form.kind.trim(), status: "scheduled", location: form.location.trim() || null };
-    const { error } = editingId ? await supabase.from("appointments").update(values).eq("id", editingId).eq("school_id", school.id) : await supabase.from("appointments").insert(values);
-    if (error) setMessage("Não foi possível salvar o atendimento. Confira os dados.");
-    else { setMessage(editingId ? "Agendamento atualizado." : "Atendimento agendado com sucesso."); closeForm(); await load(); }
-    setBusy(false);
-  }
-
-  async function setStatus(item: Appointment, status: string) {
-    if (!school) return; setBusy(true); setMessage("");
-    const { error } = await supabase.from("appointments").update({ status }).eq("id", item.id).eq("school_id", school.id);
-    setMessage(error ? "Não foi possível atualizar o atendimento." : `Atendimento marcado como ${statusLabels[status].toLowerCase()}.`);
-    if (!error) await load(); setBusy(false);
-  }
-  async function removeAppointment(item: Appointment) {
-    if (!school || !confirm(`Excluir o agendamento de ${item.students?.full_name || "este aluno"}?`)) return;
-    setBusy(true); const { error } = await supabase.from("appointments").delete().eq("id", item.id).eq("school_id", school.id);
-    setMessage(error ? "Não foi possível excluir o agendamento." : "Agendamento excluído."); if (!error) await load(); setBusy(false);
-  }
-
-  if (!school) return <main className="loading">Carregando agenda…</main>;
-  const canSchedule = students.length > 0 && professionals.length > 0;
-
-  return <AppShell email={email}>
-    <header className="agenda-header"><div><p className="eyebrow green">EQUIPE MULTIPROFISSIONAL</p><h1>Agenda</h1><p className="muted">Organize os acolhimentos e atendimentos da equipe.</p></div><button className="primary-button" disabled={!canSchedule} onClick={() => { closeForm(); setShowForm(true); }}><Plus /> Agendar atendimento</button></header>
-    {!students.length && <div className="agenda-warning"><UserRound /><div><b>A agenda será liberada após o cadastro dos alunos.</b><p>O senhor poderá enviar o PDF das turmas para a importação automática.</p></div><Link href="/dashboard/alunos">Alunos e turmas</Link></div>}
-    {message && <div className="feedback" role="status">{message}</div>}
-    {showForm && <form className="card appointment-form" onSubmit={saveAppointment}><div className="form-heading"><div><h2>{editingId ? "Editar agendamento" : "Agendar atendimento"}</h2><p className="muted">Defina quem será atendido, quando e por qual profissional.</p></div><button type="button" className="close-button" onClick={closeForm}><X /></button></div><div className="appointment-form-grid">
-      <div className="student-picker">
-        <span className="field-label">Aluno</span>
-        {selectedStudent ? <div className="selected-student"><div><strong>{selectedStudent.full_name}</strong><small>{selectedStudent.classes?.name || "Sem turma"}</small></div><button type="button" onClick={() => { setForm({ ...form, student_id: "", referral_id: "" }); setStudentSearch(""); }}>Trocar aluno</button></div> : <>
-          <select aria-label="Filtrar alunos por turma" value={studentClassFilter} onChange={e => setStudentClassFilter(e.target.value)}>
-            <option value="">Todas as turmas</option>
-            {studentClasses.map(className => <option value={className} key={className}>{className}</option>)}
-          </select>
-          <label className="student-search"><Search /><input value={studentSearch} onChange={e => setStudentSearch(e.target.value)} placeholder="Digite o nome do aluno" autoComplete="off" autoFocus /></label>
-          {!studentSearch.trim() && !studentClassFilter ? <p className="student-picker-help">Digite parte do nome ou escolha uma turma.</p> : <div className="student-results" role="listbox" aria-label="Alunos encontrados">
-            {studentResults.length ? studentResults.map(student => <button type="button" role="option" aria-selected="false" key={student.id} onClick={() => { setForm({ ...form, student_id: student.id, referral_id: "" }); setStudentSearch(student.full_name); }}><strong>{student.full_name}</strong><small>{student.classes?.name || "Sem turma"}</small></button>) : <p>Nenhum aluno encontrado.</p>}
-            {studentResults.length === 30 && <small className="results-limit">Mostrando os primeiros 30. Digite mais letras para refinar.</small>}
-          </div>}
-        </>}
-      </div>
-      <label>Profissional<select value={form.professional_id} onChange={e => setForm({ ...form, professional_id: e.target.value })} required><option value="">Selecione o profissional</option>{professionals.map(person => <option value={person.user_id} key={person.user_id}>{person.profiles?.full_name || person.profiles?.email} — {roleLabels[person.role]}</option>)}</select></label>
-      <label>Encaminhamento relacionado<select value={form.referral_id} onChange={e => setForm({ ...form, referral_id: e.target.value })}><option value="">Sem vínculo</option>{referrals.filter(item => item.student_id === form.student_id).map(item => <option value={item.id} key={item.id}>{item.reason_summary.slice(0, 70)}</option>)}</select></label>
-      <label>Data<input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required /></label><label>Horário<input type="time" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} required /></label><label>Duração<select value={form.duration} onChange={e => setForm({ ...form, duration: e.target.value })}><option value="30">30 minutos</option><option value="50">50 minutos</option><option value="60">1 hora</option><option value="90">1h30</option></select></label>
-      <label>Tipo de atendimento<select value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}><option>Acolhimento individual</option><option>Atendimento com a família</option><option>Reunião com professor</option><option>Acompanhamento em sala</option><option>Discussão de caso</option><option>Contato com a rede de proteção</option></select></label><label className="wide-field">Local<input value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} /></label>
-    </div><div className="appointment-form-actions"><button type="button" className="secondary-button" onClick={closeForm}>Cancelar</button><button disabled={busy}>{busy ? "Salvando…" : "Salvar agendamento"}</button></div></form>}
-
-    <section className="agenda-stats"><article><CalendarDays /><div><strong>{todayCount}</strong><span>atendimentos hoje</span></div></article><article><Clock3 /><div><strong>{appointments.filter(item => item.status === "scheduled").length}</strong><span>agendamentos ativos</span></div></article></section>
-    <section className="card agenda-card"><div className="agenda-toolbar"><div><h2>Compromissos</h2><p className="muted">Agenda da equipe multiprofissional</p></div><div className="view-toggle"><button className={view === "upcoming" ? "selected" : ""} onClick={() => setView("upcoming")}>Próximos</button><button className={view === "all" ? "selected" : ""} onClick={() => setView("all")}>Todos</button></div></div>
-      {!visibleAppointments.length ? <div className="empty"><CalendarDays /><h3>Agenda livre</h3><p>Os próximos atendimentos aparecerão aqui.</p></div> : <div className="appointment-list">{visibleAppointments.map(item => <article className={`appointment-item status-${item.status}`} key={item.id}><div className="appointment-date"><b>{dateFormatter.format(new Date(item.starts_at))}</b><strong>{timeFormatter.format(new Date(item.starts_at))}</strong><span>até {timeFormatter.format(new Date(item.ends_at))}</span></div><div className="appointment-info"><div><span className="status-pill">{statusLabels[item.status] || item.status}</span><h3>{item.students?.full_name || "Aluno"}</h3><small>{item.students?.classes?.name || "Sem turma"}</small></div><p>{item.kind}{item.location ? ` · ${item.location}` : ""}</p><span>Profissional: {item.profiles?.full_name || item.profiles?.email || "não definido"}</span></div><div className="appointment-actions">{item.status === "scheduled" && <button className="complete" disabled={busy} onClick={() => setStatus(item, "completed")}><CheckCircle2 /> Concluir</button>}<button onClick={() => editAppointment(item)} title="Editar"><Pencil /></button><button className="delete" onClick={() => removeAppointment(item)} title="Excluir"><Trash2 /></button></div></article>)}</div>}
-    </section>
-  </AppShell>;
+export default function Agenda(){
+ const [supabase]=useState(()=>createClient()); const router=useRouter();
+ const [email,setEmail]=useState(""); const [school,setSchool]=useState<School|null>(null); const [role,setRole]=useState(""); const [userId,setUserId]=useState("");
+ const [referrals,setReferrals]=useState<Referral[]>([]); const [appointments,setAppointments]=useState<Appointment[]>([]); const [form,setForm]=useState(emptyForm); const [editingId,setEditingId]=useState<string|null>(null); const [showForm,setShowForm]=useState(false); const [message,setMessage]=useState(""); const [busy,setBusy]=useState(false); const [view,setView]=useState<"upcoming"|"all">("upcoming");
+ const load=useCallback(async()=>{ const {data:{user}}=await supabase.auth.getUser(); if(!user){router.replace("/login");return;} setEmail(user.email||"");setUserId(user.id);
+  const {data:m}=await supabase.from("school_memberships").select("school_id,role,schools(id,name)").eq("user_id",user.id).eq("active",true).limit(1).single(); const raw=m?.schools as unknown; const current=(Array.isArray(raw)?raw[0]:raw) as School|undefined; if(!current)return; setSchool(current);setRole(String(m?.role||""));
+  const [{data:r},{data:a}]=await Promise.all([
+   supabase.from("referrals").select("id,student_id,reason_summary,status,students(full_name,classes(name))").eq("school_id",current.id).neq("status","completed").order("created_at",{ascending:false}),
+   supabase.from("appointments").select("id,student_id,referral_id,professional_id,starts_at,ends_at,kind,status,location,appointment_type,cancellation_reason,cancellation_decision,students(full_name,classes(name)),profiles!appointments_professional_id_fkey(full_name,email)").eq("school_id",current.id).order("starts_at")
+  ]); setReferrals((r||[]) as unknown as Referral[]);setAppointments((a||[]) as unknown as Appointment[]);
+ },[router,supabase]); useEffect(()=>{load();},[load]);
+ const canSchedule=canOperateSchedule(role), canApprove=canDecideCancellation(role);
+ const pending=useMemo(()=>referrals.filter(r=>!appointments.some(a=>a.referral_id===r.id&&["scheduled","cancellation_requested"].includes(a.status))),[referrals,appointments]);
+ const visible=useMemo(()=>{if(view==="all")return appointments; const d=new Date();d.setHours(0,0,0,0);return appointments.filter(a=>new Date(a.starts_at)>=d&&["scheduled","cancellation_requested"].includes(a.status));},[appointments,view]);
+ function openReferral(r:Referral,type="initial"){setForm({...emptyForm,referral_id:r.id,appointment_type:type});setEditingId(null);setShowForm(true);setMessage("");window.scrollTo({top:0,behavior:"smooth"});}
+ function edit(a:Appointment){const d=new Date(a.starts_at),e=new Date(a.ends_at);const p=new Intl.DateTimeFormat("en-CA",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23",timeZone:"America/Fortaleza"}).formatToParts(d);const x=(t:string)=>p.find(i=>i.type===t)?.value||"";setForm({referral_id:a.referral_id,date:`${x("year")}-${x("month")}-${x("day")}`,time:`${x("hour")}:${x("minute")}`,duration:String(Math.round((e.getTime()-d.getTime())/60000)),kind:a.kind,location:a.location||"",appointment_type:a.appointment_type||"initial"});setEditingId(a.id);setShowForm(true);}
+ async function save(ev:FormEvent){ev.preventDefault();if(!school||!canSchedule||!form.referral_id)return;const r=referrals.find(x=>x.id===form.referral_id);if(!r)return;setBusy(true);setMessage("");const start=new Date(`${form.date}T${form.time}:00`),end=new Date(start.getTime()+Number(form.duration)*60000);const values={school_id:school.id,student_id:r.student_id,referral_id:r.id,professional_id:userId,starts_at:start.toISOString(),ends_at:end.toISOString(),kind:form.kind,status:"scheduled",location:form.location||null,appointment_type:form.appointment_type};const {error}=editingId?await supabase.from("appointments").update(values).eq("id",editingId):await supabase.from("appointments").insert(values);if(!error)await supabase.from("referrals").update({status:"scheduled",assigned_to:userId}).eq("id",r.id);setMessage(error?"Não foi possível salvar o agendamento.":"Agendamento vinculado ao encaminhamento com sucesso.");if(!error){setShowForm(false);setForm(emptyForm);setEditingId(null);await load();}setBusy(false);}
+ async function absent(a:Appointment){if(!canSchedule)return;setBusy(true);const {error}=await supabase.from("appointments").update({status:"absent"}).eq("id",a.id);setMessage(error?"Não foi possível registrar a ausência.":"Não comparecimento registrado. O encaminhamento permanece aberto para reagendamento.");if(!error)await load();setBusy(false);}
+ async function requestCancel(a:Appointment){if(!canSchedule)return;const reason=prompt("Informe a justificativa administrativa para solicitar o cancelamento:");if(!reason?.trim())return;setBusy(true);const {error}=await supabase.rpc("request_appointment_cancellation",{p_appointment:a.id,p_reason:reason.trim()});setMessage(error?"Não foi possível solicitar o cancelamento.":"Cancelamento enviado para análise da Direção/Coordenação.");if(!error)await load();setBusy(false);}
+ async function decide(a:Appointment,approve:boolean){if(!canApprove)return;setBusy(true);const {error}=await supabase.rpc("decide_appointment_cancellation",{p_appointment:a.id,p_approve:approve});setMessage(error?"Não foi possível registrar a decisão.":approve?"Cancelamento aprovado.":"Cancelamento não aprovado; o agendamento voltou a ficar ativo.");if(!error)await load();setBusy(false);}
+ if(!school)return <main className="loading">Carregando agenda…</main>;
+ const selected=referrals.find(r=>r.id===form.referral_id);
+ return <AppShell email={email}>
+  <header className="agenda-header"><div><p className="eyebrow green">EQUIPE MULTIPROFISSIONAL</p><h1>Agenda</h1><p className="muted">Todo agendamento nasce de um encaminhamento da Direção ou Coordenação.</p></div></header>
+  {message&&<div className="feedback" role="status">{message}</div>}
+  {canSchedule&&<section className="card"><div className="form-heading"><div><h2>Encaminhamentos aguardando agendamento</h2><p className="muted">Selecione uma demanda encaminhada. Não é possível agendar aluno sem encaminhamento.</p></div></div>{pending.length?pending.map(r=><div className="appointment-item" key={r.id}><div className="appointment-person"><UserRound/><div><strong>{r.students?.full_name}</strong><small>{r.students?.classes?.name||"Sem turma"} · {r.reason_summary}</small></div></div><button className="primary-button" onClick={()=>openReferral(r)}><Plus/> Agendar</button></div>):<p className="muted">Nenhum encaminhamento aguardando primeiro agendamento.</p>}</section>}
+  {!canSchedule&&<div className="agenda-warning"><CalendarDays/><div><b>Agenda em modo de acompanhamento.</b><p>Direção e Coordenação visualizam os compromissos e analisam solicitações de cancelamento. Os agendamentos são feitos pela Psicologia e Serviço Social.</p></div></div>}
+  {showForm&&canSchedule&&selected&&<form className="card appointment-form" onSubmit={save}><div className="form-heading"><div><h2>{editingId?"Editar agendamento":"Agendar a partir do encaminhamento"}</h2><p className="muted"><b>{selected.students?.full_name}</b> · {selected.reason_summary}</p></div><button type="button" className="close-button" onClick={()=>setShowForm(false)}><X/></button></div><div className="appointment-form-grid"><label>Classificação<select value={form.appointment_type} onChange={e=>setForm({...form,appointment_type:e.target.value})}><option value="initial">Primeiro atendimento</option><option value="return">Retorno</option></select></label><label>Data<input required type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></label><label>Horário<input required type="time" value={form.time} onChange={e=>setForm({...form,time:e.target.value})}/></label><label>Duração<select value={form.duration} onChange={e=>setForm({...form,duration:e.target.value})}><option value="30">30 minutos</option><option value="50">50 minutos</option><option value="60">1 hora</option><option value="90">1h30</option></select></label><label>Tipo<select value={form.kind} onChange={e=>setForm({...form,kind:e.target.value})}><option>Acolhimento individual</option><option>Atendimento com a família</option><option>Reunião com professor</option><option>Acompanhamento em sala</option><option>Discussão de caso</option><option>Contato com a rede de proteção</option></select></label><label>Local<input value={form.location} onChange={e=>setForm({...form,location:e.target.value})}/></label></div><div className="appointment-form-actions"><button type="button" className="secondary-button" onClick={()=>setShowForm(false)}>Voltar</button><button className="primary-button" disabled={busy}>{busy?"Salvando…":"Salvar agendamento"}</button></div></form>}
+  <section className="agenda-summary"><div className="summary-card"><CalendarDays/><div><span>Compromissos</span><strong>{visible.length}</strong></div></div><div className="view-toggle"><button className={view==="upcoming"?"active":""} onClick={()=>setView("upcoming")}>Próximos</button><button className={view==="all"?"active":""} onClick={()=>setView("all")}>Histórico</button></div></section>
+  <section className="appointment-list">{visible.length?visible.map(a=><article className="card appointment-card" key={a.id}><div className="appointment-time"><CalendarDays/><strong>{dateFmt.format(new Date(a.starts_at))}</strong><span><Clock3/> {timeFmt.format(new Date(a.starts_at))}</span></div><div className="appointment-main"><div className="appointment-person"><UserRound/><div><strong>{a.students?.full_name}</strong><small>{a.students?.classes?.name||"Sem turma"}</small></div></div><div className="appointment-tags"><span>{appointmentTypeLabels[a.appointment_type]||"Primeiro atendimento"}</span><span>{a.kind}</span><span>{appointmentStatusLabels[a.status]||a.status}</span></div><p className="muted">Profissional: {a.profiles?.full_name||a.profiles?.email}</p>{a.cancellation_reason&&<p><b>Justificativa de cancelamento:</b> {a.cancellation_reason}</p>}</div><div className="appointment-actions">{canSchedule&&a.status==="scheduled"&&<><button title="Editar" onClick={()=>edit(a)}><Pencil/></button><button onClick={()=>absent(a)}>Não compareceu</button><button onClick={()=>requestCancel(a)}>Solicitar cancelamento</button></>}{canApprove&&a.status==="cancellation_requested"&&<><button className="primary-button" onClick={()=>decide(a,true)}><CheckCircle2/> Aprovar cancelamento</button><button className="secondary-button" onClick={()=>decide(a,false)}>Não aprovar</button></>}</div></article>):<div className="card empty-agenda"><CalendarDays/><h2>Nenhum compromisso nesta visualização</h2></div>}</section>
+ </AppShell>;
 }
