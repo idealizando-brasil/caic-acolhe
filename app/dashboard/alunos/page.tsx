@@ -85,7 +85,7 @@ export default function AlunosETurmas() {
     return counts;
   }, [students]);
 
-  const canManageStudents = role === "director" || role === "coordinator";
+  const canManageStudents = role === "director";
 
   function closeForm() {
     setForm(emptyForm);
