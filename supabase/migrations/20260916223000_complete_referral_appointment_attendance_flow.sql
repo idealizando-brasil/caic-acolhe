@@ -8,9 +8,15 @@ alter table public.appointments add column if not exists cancellation_requested_
 alter table public.appointments add column if not exists cancellation_decision text;
 alter table public.appointments add column if not exists cancellation_decided_by uuid references public.profiles(id);
 alter table public.appointments add column if not exists cancellation_decided_at timestamptz;
-alter table public.appointments add constraint appointments_type_check check (appointment_type in ('initial','return')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname='appointments_type_check') then
+    alter table public.appointments add constraint appointments_type_check check (appointment_type in ('initial','return')) not valid;
+  end if;
+  if not exists (select 1 from pg_constraint where conname='appointments_cancel_decision_check') then
+    alter table public.appointments add constraint appointments_cancel_decision_check check (cancellation_decision is null or cancellation_decision in ('approved','rejected')) not valid;
+  end if;
+end $$;
 alter table public.appointments validate constraint appointments_type_check;
-alter table public.appointments add constraint appointments_cancel_decision_check check (cancellation_decision is null or cancellation_decision in ('approved','rejected')) not valid;
 alter table public.appointments validate constraint appointments_cancel_decision_check;
 
 -- Novos agendamentos obrigatoriamente nascem de um encaminhamento do mesmo aluno/escola.
@@ -26,7 +32,19 @@ end $$;
 drop trigger if exists validate_appointment_referral on public.appointments;
 create trigger validate_appointment_referral before insert or update of referral_id,student_id,school_id on public.appointments for each row execute function private.validate_appointment_referral();
 
--- Agenda: leitura pela equipe autorizada; escrita somente Psicologia/Servico Social.
+-- Cancelamento definitivo nunca pode ser feito diretamente pela Equipe Multiprofissional.
+create or replace function private.protect_appointment_cancellation()
+returns trigger language plpgsql security definer set search_path='' as $$
+begin
+  if old.status is distinct from 'cancelled' and new.status='cancelled' and not private.has_school_role(new.school_id,array['director','coordinator']::public.app_role[]) then
+    raise exception 'Cancelamento exige aprovacao da Direcao ou Coordenacao';
+  end if;
+  return new;
+end $$;
+drop trigger if exists protect_appointment_cancellation on public.appointments;
+create trigger protect_appointment_cancellation before update of status on public.appointments for each row execute function private.protect_appointment_cancellation();
+
+-- Agenda: leitura pela equipe autorizada; escrita operacional somente Psicologia/Servico Social.
 drop policy if exists staff_appointments on public.appointments;
 drop policy if exists appointments_read on public.appointments;
 drop policy if exists appointments_insert on public.appointments;
@@ -34,8 +52,7 @@ drop policy if exists appointments_update on public.appointments;
 drop policy if exists appointments_delete on public.appointments;
 create policy appointments_read on public.appointments for select to authenticated using(private.has_school_role(school_id,array['director','coordinator','psychologist','social_worker']::public.app_role[]));
 create policy appointments_insert on public.appointments for insert to authenticated with check(professional_id=auth.uid() and private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[]));
-create policy appointments_update on public.appointments for update to authenticated using(private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[])) with check(private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[]));
-create policy appointments_delete on public.appointments for delete to authenticated using(private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[]));
+create policy appointments_update on public.appointments for update to authenticated using(professional_id=auth.uid() and private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[])) with check(professional_id=auth.uid() and private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[]));
 
 -- Atendimento sempre exige agendamento e encaminhamento coerentes.
 create or replace function private.validate_attendance_flow()
@@ -57,13 +74,19 @@ create trigger validate_attendance_flow before insert or update of appointment_i
 drop policy if exists attendances_insert on public.attendances;
 create policy attendances_insert on public.attendances for insert to authenticated with check(author_id=auth.uid() and private.has_school_role(school_id,array['psychologist','social_worker']::public.app_role[]));
 
+-- Escuta Ativa / Demanda: sigilo individual. Somente o autor do atendimento pode ler.
+drop policy if exists private_demands_read_team on public.attendance_private_demands;
+drop policy if exists private_demands_read_own on public.attendance_private_demands;
+create policy private_demands_read_own on public.attendance_private_demands for select to authenticated using(author_id=auth.uid());
+
 -- Solicitacao de cancelamento pela profissional; decisao exclusiva da Direcao/Coordenacao.
 create or replace function public.request_appointment_cancellation(p_appointment uuid,p_reason text)
 returns void language plpgsql security definer set search_path='' as $$
 declare ap public.appointments%rowtype;
 begin
   select * into ap from public.appointments where id=p_appointment;
-  if not found or not private.has_school_role(ap.school_id,array['psychologist','social_worker']::public.app_role[]) then raise exception 'Sem permissao'; end if;
+  if not found or ap.professional_id<>auth.uid() or not private.has_school_role(ap.school_id,array['psychologist','social_worker']::public.app_role[]) then raise exception 'Sem permissao'; end if;
+  if ap.status<>'scheduled' then raise exception 'Somente agendamento ativo pode solicitar cancelamento'; end if;
   if trim(coalesce(p_reason,''))='' then raise exception 'Justificativa obrigatoria'; end if;
   update public.appointments set status='cancellation_requested',cancellation_reason=trim(p_reason),cancellation_requested_by=auth.uid(),cancellation_requested_at=now(),cancellation_decision=null,cancellation_decided_by=null,cancellation_decided_at=null where id=p_appointment;
 end $$;
