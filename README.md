@@ -1,2 +1,2 @@
-# caic-acolhe
-Plataforma multiescolas para gestão de atendimentos e encaminhamentos multiprofissionais.
+# CAIC CUIDA
+Plataforma multiescolas para permanência, vínculo, proteção e acompanhamento multiprofissional.
