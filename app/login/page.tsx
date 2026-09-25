@@ -100,8 +100,8 @@ export default function Login(){
 
  return <main className="login-shell">
   <section className="brand-panel">
-   <div className="brand"><span className="brand-mark"><HeartHandshake/></span><span>CAIC <b>Acolhe</b></span></div>
-   <div><p className="eyebrow">CUIDAR PARA EDUCAR</p><h1>Acolhimento que aproxima escola, família e cuidado.</h1><p className="lead">Organize encaminhamentos e acompanhamento multiprofissional com segurança e humanidade.</p></div>
+   <div className="brand"><span className="brand-mark"><HeartHandshake/></span><span>CAIC <b>CUIDA</b></span></div>
+   <div><p className="eyebrow">CUIDAR PARA EDUCAR</p><h1>Cuidado que aproxima escola, família e proteção.</h1><p className="lead">Acompanhe estudantes, famílias e demandas multiprofissionais com segurança, cuidado e responsabilidade.</p></div>
    <div className="security-note"><ShieldCheck/><span>Dados protegidos e acessos definidos por função.</span></div>
   </section>
   <section className="login-panel">
